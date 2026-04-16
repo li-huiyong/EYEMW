@@ -1,11 +1,15 @@
-"""Paper Analysis 6 (RQ4): Does gaze add incremental value beyond affect,
+"""Paper Analysis RQ3: Does gaze add incremental value beyond affect,
 and if so, in which contexts?
 
 Part A — Incremental gains with bootstrap CIs
-  Four nested feature conditions under participant-grouped 5-fold CV:
-    gaze_only, emotion_only, emotion_simple_gaze, emotion_rich
+  Four nested feature conditions (names aligned with RQ1 / RQ2) under
+  participant-grouped 5-fold CV:
+    gaze_rich      -- engineered gaze (Space A minus context dummies)
+    emotion        -- harmonized affect norms (columns with >90% NaN dropped)
+    emotion_gaze_ratio -- emotion + two gaze-ratio columns
+    emotion_gaze_rich  -- emotion + full engineered gaze (no context dummies)
   Per-study breakdown and cluster-bootstrap CIs on the deltas
-  (emotion_simple_gaze − emotion_only, emotion_rich − emotion_only).
+  (emotion_gaze_ratio − emotion, emotion_gaze_rich − emotion).
 
 Part B — Mixed-effects interaction model
   GEE logistic regression with valence_norm (the one affect variable common
@@ -13,12 +17,12 @@ Part B — Mixed-effects interaction model
   valence_norm × TaskGroup interactions.
 
 Outputs:
-  results/tables/P6_incremental_gains.csv
-  results/tables/P6_per_study_gains.csv
-  results/tables/P6_bootstrap_deltas.csv
-  results/tables/P6_gee_interaction.csv
-  results/figures/P6_incremental_gains.png
-  results/figures/P6_per_study_delta.png
+  results/tables/RQ3_incremental_gains.csv
+  results/tables/RQ3_per_study_gains.csv
+  results/tables/RQ3_bootstrap_deltas.csv
+  results/tables/RQ3_gee_interaction.csv
+  results/figures/RQ3_incremental_gains.png
+  results/figures/RQ3_per_study_delta.png
 """
 
 import sys
@@ -58,14 +62,16 @@ def _select_affect(df):
     return df[has_any].copy()
 
 
-def _gaze_only(df, train_idx=None):
+def _gaze_rich(df, train_idx=None):
+    """Engineered gaze only (same block as RQ1 ``gaze_rich``)."""
     X_a, _, _ = build_features_A(df, train_idx=train_idx)
     gaze_cols = [c for c in X_a.columns
                  if not c.startswith(("WindowType_", "TaskGroup_"))]
     return X_a[gaze_cols].values.astype(float)
 
 
-def _emotion_only(df, train_idx=None):
+def _emotion(df, train_idx=None):
+    """Harmonized affect norms (same idea as RQ1 ``emotion``)."""
     norm_cols = [f"{c}_norm" for c in ALL_CONSTRUCTS
                  if f"{c}_norm" in df.columns and c != "TUT"]
     X = df[norm_cols].apply(pd.to_numeric, errors="coerce")
@@ -74,25 +80,28 @@ def _emotion_only(df, train_idx=None):
     return X[keep].values.astype(float)
 
 
-def _emotion_simple_gaze(df, train_idx=None):
-    emo = _emotion_only(df, train_idx=train_idx)
+def _emotion_gaze_ratio(df, train_idx=None):
+    """Emotion + two gaze ratios (same as RQ1 ``emotion_gaze_ratio``)."""
+    emo = _emotion(df, train_idx=train_idx)
     simple = df[["UniqueGazeProportion", "OffScreenGazeProportion"]].apply(
         pd.to_numeric, errors="coerce"
     ).values.astype(float)
     return np.column_stack([emo, simple])
 
 
-def _emotion_rich(df, train_idx=None):
-    emo = _emotion_only(df, train_idx=train_idx)
-    gaze = _gaze_only(df, train_idx=train_idx)
+def _emotion_gaze_rich(df, train_idx=None):
+    """Emotion + full engineered gaze without context (RQ1 ``emotion_gaze_rich``)."""
+    emo = _emotion(df, train_idx=train_idx)
+    gaze = _gaze_rich(df, train_idx=train_idx)
     return np.column_stack([emo, gaze])
 
 
+# Keys match RQ1 REGIME_ORDER except RQ3 omits ``gaze_ratio`` (two columns only).
 CONDITIONS = {
-    "gaze_only": _gaze_only,
-    "emotion_only": _emotion_only,
-    "emotion_simple_gaze": _emotion_simple_gaze,
-    "emotion_rich": _emotion_rich,
+    "gaze_rich": _gaze_rich,
+    "emotion": _emotion,
+    "emotion_gaze_ratio": _emotion_gaze_ratio,
+    "emotion_gaze_rich": _emotion_gaze_rich,
 }
 
 
@@ -142,7 +151,7 @@ def part_a(df_affect):
     fold_df = _run_grouped_cv(df_affect, y, groups, CONDITIONS)
     summary = _summarize(fold_df)
     print(summary.to_string())
-    fold_df.to_csv(TABLES_DIR / "P6_incremental_gains.csv", index=False)
+    fold_df.to_csv(TABLES_DIR / "RQ3_incremental_gains.csv", index=False)
 
     # 2. Per-study breakdown
     print("\n=== Per-study breakdown ===")
@@ -172,14 +181,14 @@ def part_a(df_affect):
               f"({len(df_s)} rows, {n_groups} participants)")
 
     per_study_df = pd.DataFrame(per_study_rows)
-    per_study_df.to_csv(TABLES_DIR / "P6_per_study_gains.csv", index=False)
+    per_study_df.to_csv(TABLES_DIR / "RQ3_per_study_gains.csv", index=False)
 
     # 3. Cluster-bootstrap CIs on incremental deltas
     print("\n=== Bootstrap CIs on incremental deltas ===")
     delta_rows = []
     for delta_name, cond_a, cond_b in [
-        ("simple_minus_emo", "emotion_simple_gaze", "emotion_only"),
-        ("rich_minus_emo", "emotion_rich", "emotion_only"),
+        ("emotion_gaze_ratio_minus_emotion", "emotion_gaze_ratio", "emotion"),
+        ("emotion_gaze_rich_minus_emotion", "emotion_gaze_rich", "emotion"),
     ]:
         f1_a = fold_df[fold_df["condition"] == cond_a]["macro_f1"].values
         f1_b = fold_df[fold_df["condition"] == cond_b]["macro_f1"].values
@@ -203,7 +212,7 @@ def part_a(df_affect):
               f"[{lo:.4f}, {hi:.4f}]")
 
     delta_df = pd.DataFrame(delta_rows)
-    delta_df.to_csv(TABLES_DIR / "P6_bootstrap_deltas.csv", index=False)
+    delta_df.to_csv(TABLES_DIR / "RQ3_bootstrap_deltas.csv", index=False)
 
     return fold_df, per_study_df
 
@@ -265,8 +274,8 @@ def part_b(df_affect):
             "z": result.tvalues,
             "p_value": result.pvalues,
         })
-        coef_df.to_csv(TABLES_DIR / "P6_gee_interaction.csv")
-        print(f"\n  Saved GEE coefficients to P6_gee_interaction.csv")
+        coef_df.to_csv(TABLES_DIR / "RQ3_gee_interaction.csv")
+        print(f"\n  Saved GEE coefficients to RQ3_gee_interaction.csv")
     except Exception as e:
         print(f"  GEE fitting failed: {e}")
 
@@ -275,7 +284,7 @@ def part_b(df_affect):
 
 def _plot_overall(fold_df):
     summary = fold_df.groupby("condition")["macro_f1"].agg(["mean", "std"])
-    order = ["gaze_only", "emotion_only", "emotion_simple_gaze", "emotion_rich"]
+    order = ["gaze_rich", "emotion", "emotion_gaze_ratio", "emotion_gaze_rich"]
     summary = summary.loc[[c for c in order if c in summary.index]]
 
     fig, ax = plt.subplots(figsize=(7, 4))
@@ -285,20 +294,20 @@ def _plot_overall(fold_df):
     ax.set_xticks(x)
     ax.set_xticklabels(summary.index, fontsize=8, rotation=15, ha="right")
     ax.set_ylabel("Macro-F1")
-    ax.set_title("RQ4: Incremental Feature Ablation (5-fold Grouped CV)")
+    ax.set_title("RQ3: Incremental Feature Ablation (5-fold Grouped CV)")
     ax.set_ylim(0, 0.8)
     ax.axhline(0.5, color="grey", ls="--", alpha=0.4, lw=0.8)
     plt.tight_layout()
-    fig.savefig(FIGURES_DIR / "P6_incremental_gains.png", dpi=200)
+    fig.savefig(FIGURES_DIR / "RQ3_incremental_gains.png", dpi=200)
     plt.close(fig)
-    print(f"Saved figure to P6_incremental_gains.png")
+    print(f"Saved figure to RQ3_incremental_gains.png")
 
 
 def _plot_per_study_delta(per_study_df):
     if per_study_df.empty:
         return
     studies = sorted(per_study_df["study_id"].unique())
-    conds = ["emotion_only", "emotion_simple_gaze", "emotion_rich"]
+    conds = ["emotion", "emotion_gaze_ratio", "emotion_gaze_rich"]
     x = np.arange(len(studies))
     width = 0.25
 
@@ -316,14 +325,14 @@ def _plot_per_study_delta(per_study_df):
     ax.set_xticks(x + width)
     ax.set_xticklabels(labels, fontsize=8)
     ax.set_ylabel("Macro-F1")
-    ax.set_title("RQ4: Per-Study Incremental Gaze Value")
+    ax.set_title("RQ3: Per-Study Incremental Gaze Value")
     ax.set_ylim(0, 0.8)
     ax.legend(fontsize=8)
     ax.axhline(0.5, color="grey", ls="--", alpha=0.4, lw=0.8)
     plt.tight_layout()
-    fig.savefig(FIGURES_DIR / "P6_per_study_delta.png", dpi=200)
+    fig.savefig(FIGURES_DIR / "RQ3_per_study_delta.png", dpi=200)
     plt.close(fig)
-    print(f"Saved figure to P6_per_study_delta.png")
+    print(f"Saved figure to RQ3_per_study_delta.png")
 
 
 # ── Main ─────────────────────────────────────────────────────────────────────

@@ -1,18 +1,18 @@
-"""Paper Analysis 5 (RQ3): Does emotion-aware TUT prediction generalize
+"""Paper Analysis RQ4: Does emotion-aware TUT prediction generalize
 across learning contexts?
 
 Leave-one-study-out evaluation on the affect-available subset with three
-feature conditions (gaze_only, emotion_only, emotion_gaze).  Within-study
-baselines are loaded from P1 results.
+feature conditions (gaze_rich, emotion, emotion_gaze_ratio).  Within-study
+baselines are loaded from RQ2 results.
 
 LOWO / LOTG are omitted because WindowType and TaskGroup map 1:1 to
 study_id in EYEMW.  Each held-out row is annotated with TaskGroup and
 WindowType so the table can be read as task-family transfer.
 
 Outputs:
-  results/tables/P5_cross_context.csv
-  results/tables/P5_generalization_gap.csv
-  results/figures/P5_cross_context.png
+  results/tables/RQ4_cross_context.csv
+  results/tables/RQ4_generalization_gap.csv
+  results/figures/RQ4_cross_context.png
 """
 
 import sys
@@ -28,7 +28,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
 from src.config import (
     LABEL_COL, GROUP_COL, ALL_CONSTRUCTS, STUDY_META,
-    GAZE_PROPORTION_COLS, TABLES_DIR, FIGURES_DIR, SEED,
+    TABLES_DIR, FIGURES_DIR, SEED,
 )
 from src.harmonize import harmonize_all
 from src.features import build_features_A
@@ -36,6 +36,12 @@ from src.cv import leave_one_study_out
 from src.models import get_logreg_pipeline
 from src.evaluate import classification_metrics, generalization_gap
 from src.utils import set_seed
+
+
+GAZE_RATIO_FEATURES = [
+    "UniqueGazeProportion",
+    "OffScreenGazeProportion",
+]
 
 
 def _select_affect_studies(df):
@@ -46,14 +52,14 @@ def _select_affect_studies(df):
     return df[has_any].copy()
 
 
-def _build_gaze_only(df, train_idx=None):
+def _build_gaze_rich(df, train_idx=None):
     X_a, _, _ = build_features_A(df, train_idx=train_idx)
     gaze_cols = [c for c in X_a.columns
                  if not c.startswith(("WindowType_", "TaskGroup_"))]
     return X_a[gaze_cols].values.astype(float)
 
 
-def _build_emotion_only(df, train_idx=None):
+def _build_emotion(df, train_idx=None):
     norm_cols = [f"{c}_norm" for c in ALL_CONSTRUCTS
                  if f"{c}_norm" in df.columns and c != "TUT"]
     X = df[norm_cols].apply(pd.to_numeric, errors="coerce")
@@ -62,10 +68,11 @@ def _build_emotion_only(df, train_idx=None):
     return X[keep].values.astype(float)
 
 
-def _build_emotion_gaze(df, train_idx=None):
-    gaze = _build_gaze_only(df, train_idx=train_idx)
-    emo = _build_emotion_only(df, train_idx=train_idx)
-    return np.column_stack([emo, gaze])
+def _build_emotion_gaze_ratio(df, train_idx=None):
+    """Emotion + two gaze-ratio columns (matches RQ2 ``emotion_gaze_ratio``)."""
+    emo = _build_emotion(df, train_idx=train_idx)
+    g = df[GAZE_RATIO_FEATURES].apply(pd.to_numeric, errors="coerce").values.astype(float)
+    return np.column_stack([emo, g])
 
 
 def _make_pipe():
@@ -87,9 +94,9 @@ def main() -> None:
     study_labels = df_affect["study_id"].values
 
     builders = {
-        "gaze_only": _build_gaze_only,
-        "emotion_only": _build_emotion_only,
-        "emotion_gaze": _build_emotion_gaze,
+        "gaze_rich": _build_gaze_rich,
+        "emotion": _build_emotion,
+        "emotion_gaze_ratio": _build_emotion_gaze_ratio,
     }
 
     # ── LOSO evaluation ──────────────────────────────────────────────────
@@ -125,17 +132,17 @@ def main() -> None:
 
     loso_df = pd.DataFrame(loso_rows)
     TABLES_DIR.mkdir(parents=True, exist_ok=True)
-    loso_df.to_csv(TABLES_DIR / "P5_cross_context.csv", index=False)
-    print(f"\nSaved {len(loso_df)} rows to P5_cross_context.csv")
+    loso_df.to_csv(TABLES_DIR / "RQ4_cross_context.csv", index=False)
+    print(f"\nSaved {len(loso_df)} rows to RQ4_cross_context.csv")
 
-    # ── Within-study baseline from P1 ────────────────────────────────────
-    p1_path = TABLES_DIR / "P1_signal_source.csv"
+    # ── Within-study baseline from RQ2 ────────────────────────────────────
+    rq2_path = TABLES_DIR / "RQ2_signal_source.csv"
     gap_rows = []
-    if p1_path.exists():
-        p1 = pd.read_csv(p1_path)
-        print("\n=== Generalization Gap (within from P1 vs LOSO) ===")
+    if rq2_path.exists():
+        rq2 = pd.read_csv(rq2_path)
+        print("\n=== Generalization Gap (within from RQ2 vs LOSO) ===")
         for cond in builders:
-            within_vals = p1[p1["condition"] == cond]["macro_f1"].tolist()
+            within_vals = rq2[rq2["condition"] == cond]["macro_f1"].tolist()
             loso_vals = loso_df[loso_df["condition"] == cond]["macro_f1"].tolist()
             if within_vals and loso_vals:
                 gap = generalization_gap(within_vals, loso_vals)
@@ -144,11 +151,11 @@ def main() -> None:
                       f"LOSO={gap['held_out_mean']:.4f}, "
                       f"gap={gap['gap_mean']:.4f}")
     else:
-        print("\nP1 results not found; skipping generalization gap.")
+        print("\nRQ2 results not found; skipping generalization gap.")
 
     if gap_rows:
         gap_df = pd.DataFrame(gap_rows)
-        gap_df.to_csv(TABLES_DIR / "P5_generalization_gap.csv", index=False)
+        gap_df.to_csv(TABLES_DIR / "RQ4_generalization_gap.csv", index=False)
 
     # ── Summary table ────────────────────────────────────────────────────
     print("\n=== LOSO summary by condition ===")
@@ -184,9 +191,9 @@ def main() -> None:
     ax.legend(fontsize=9)
     ax.axhline(0.5, color="grey", ls="--", alpha=0.4, lw=0.8)
     plt.tight_layout()
-    fig.savefig(FIGURES_DIR / "P5_cross_context.png", dpi=200)
+    fig.savefig(FIGURES_DIR / "RQ4_cross_context.png", dpi=200)
     plt.close(fig)
-    print(f"Saved figure to {FIGURES_DIR / 'P5_cross_context.png'}")
+    print(f"Saved figure to {FIGURES_DIR / 'RQ4_cross_context.png'}")
 
 
 if __name__ == "__main__":

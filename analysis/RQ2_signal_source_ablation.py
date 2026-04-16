@@ -1,28 +1,31 @@
-"""Paper Analysis 1: Where does the TUT prediction signal reside?
+"""Paper Analysis RQ2: Where does the TUT prediction signal reside?
 
 Core scientific question: Is the performance gain from the emotion-labeled
 subset driven by (a) the emotion features themselves, (b) the gaze-ratio
 features, or (c) their interaction?
 
-Compares three feature sets under identical participant-independent
-grouped nested CV on the affect-available subset:
-  1. gaze_only        -- gaze proportions + derived ratios (no context, no affect)
-  2. emotion_only     -- harmonized affect features only
-  3. gaze_ratio_only  -- the 2 most robust gaze-ratio features only
-  4. emotion_gaze     -- emotion + gaze-ratio features (the "5-feature" set)
-  5. full_B           -- all Feature Space B features (gaze + affect + context)
+Compares five feature regimes (names aligned with RQ1 single-study) under identical
+participant-independent grouped nested CV on the affect-available subset:
+
+  1. gaze_ratio     -- UniqueGazeProportion, OffScreenGazeProportion only
+  2. gaze_rich      -- engineered gaze (Feature Space A minus context dummies)
+  3. emotion        -- harmonized affect norms only (no TUT_norm)
+  4. emotion_gaze_ratio -- emotion + two gaze-ratio columns (compact multimodal)
+  5. emotion_gaze_task  -- Feature Space B: gaze + affect + context, no lags
+     (RQ1 single-study emotion_gaze_rich omits context dummies; RQ2 pools
+     multi-study and uses emotion_gaze_task with WindowType/TaskGroup one-hot.)
 
 Reports per-condition macro-F1, AUC, kappa with bootstrap 95% CIs.
-Computes pairwise delta (emotion_gaze minus each simpler set) to isolate
+Computes pairwise delta (emotion_gaze_ratio minus each simpler set) to isolate
 incremental contributions.
 
 Uses LogReg as the reference model (near-tied with SVM; keeps the
 comparison about features, not model choice).
 
 Outputs:
-  results/tables/P1_signal_source.csv
-  results/tables/P1_signal_deltas.csv
-  results/figures/P1_signal_source.png
+  results/tables/RQ2_signal_source.csv
+  results/tables/RQ2_signal_deltas.csv
+  results/figures/RQ2_signal_source.png
 """
 
 import sys
@@ -38,8 +41,7 @@ from sklearn.model_selection import GridSearchCV
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
 from src.config import (
-    LABEL_COL, GROUP_COL, GAZE_PROPORTION_COLS, GAZE_COUNT_COLS,
-    ALL_CONSTRUCTS, TABLES_DIR, FIGURES_DIR, SEED,
+    LABEL_COL, GROUP_COL, ALL_CONSTRUCTS, TABLES_DIR, FIGURES_DIR, SEED,
 )
 from src.harmonize import harmonize_all
 from src.features import build_features_A, build_features_B
@@ -54,6 +56,15 @@ GAZE_RATIO_FEATURES = [
     "OffScreenGazeProportion",
 ]
 
+# Display / CSV labels (match RQ1 where applicable)
+REGIME_ORDER = [
+    "gaze_ratio",
+    "gaze_rich",
+    "emotion",
+    "emotion_gaze_ratio",
+    "emotion_gaze_task",
+]
+
 
 def _select_affect_studies(df):
     has_any = False
@@ -63,34 +74,34 @@ def _select_affect_studies(df):
     return df[has_any].copy()
 
 
-def _build_gaze_only(df, train_idx=None):
-    """All gaze features (proportions + derived rates), no context or affect."""
+def _build_gaze_ratio(df, train_idx=None):
+    """Two gaze proportion features only."""
+    X = df[GAZE_RATIO_FEATURES].apply(pd.to_numeric, errors="coerce").copy()
+    y = df[LABEL_COL].astype(int)
+    g = df[GROUP_COL]
+    return X, y, g, "gaze_ratio"
+
+
+def _build_gaze_rich(df, train_idx=None):
+    """Engineered gaze (Space A) without context one-hot columns."""
     X_a, y, g = build_features_A(df, train_idx=train_idx)
     gaze_cols = [c for c in X_a.columns
                  if not c.startswith(("WindowType_", "TaskGroup_"))]
-    return X_a[gaze_cols], y, g, "gaze_only"
+    return X_a[gaze_cols], y, g, "gaze_rich"
 
 
-def _build_emotion_only(df, train_idx=None):
+def _build_emotion(df, train_idx=None):
     """Harmonized affect features only."""
     norm_cols = [f"{c}_norm" for c in ALL_CONSTRUCTS if f"{c}_norm" in df.columns]
     norm_cols = [c for c in norm_cols if c != "TUT_norm"]
     X = df[norm_cols].apply(pd.to_numeric, errors="coerce").copy()
     y = df[LABEL_COL].astype(int)
     g = df[GROUP_COL]
-    return X, y, g, "emotion_only"
+    return X, y, g, "emotion"
 
 
-def _build_gaze_ratio_only(df, train_idx=None):
-    """Only the 2 most robust gaze-ratio features."""
-    X = df[GAZE_RATIO_FEATURES].apply(pd.to_numeric, errors="coerce").copy()
-    y = df[LABEL_COL].astype(int)
-    g = df[GROUP_COL]
-    return X, y, g, "gaze_ratio_only"
-
-
-def _build_emotion_gaze(df, train_idx=None):
-    """Emotion + gaze-ratio features (the compact multimodal set)."""
+def _build_emotion_gaze_ratio(df, train_idx=None):
+    """Emotion + two gaze-ratio columns (compact multimodal)."""
     norm_cols = [f"{c}_norm" for c in ALL_CONSTRUCTS if f"{c}_norm" in df.columns]
     norm_cols = [c for c in norm_cols if c != "TUT_norm"]
     gaze = df[GAZE_RATIO_FEATURES].apply(pd.to_numeric, errors="coerce")
@@ -98,13 +109,13 @@ def _build_emotion_gaze(df, train_idx=None):
     X = pd.concat([affect, gaze], axis=1)
     y = df[LABEL_COL].astype(int)
     g = df[GROUP_COL]
-    return X, y, g, "emotion_gaze"
+    return X, y, g, "emotion_gaze_ratio"
 
 
-def _build_full_B(df, train_idx=None):
-    """Full Feature Space B (gaze + affect + context, no lags)."""
+def _build_emotion_gaze_task(df, train_idx=None):
+    """Feature Space B: gaze + affect + context one-hot, no lags."""
     X, y, g = build_features_B(df, include_lagged=False, train_idx=train_idx)
-    return X, y, g, "full_B"
+    return X, y, g, "emotion_gaze_task"
 
 
 def _macro_f1_metric(y_true, y_pred, _y_prob):
@@ -130,11 +141,11 @@ def main() -> None:
     print(f"Studies: {sorted(df_affect['study_id'].unique())}")
 
     builders = [
-        _build_gaze_only,
-        _build_emotion_only,
-        _build_gaze_ratio_only,
-        _build_emotion_gaze,
-        _build_full_B,
+        _build_gaze_ratio,
+        _build_gaze_rich,
+        _build_emotion,
+        _build_emotion_gaze_ratio,
+        _build_emotion_gaze_task,
     ]
 
     y = df_affect[LABEL_COL].astype(int).values
@@ -191,7 +202,7 @@ def main() -> None:
 
     out = pd.DataFrame(all_results)
     TABLES_DIR.mkdir(parents=True, exist_ok=True)
-    out.to_csv(TABLES_DIR / "P1_signal_source.csv", index=False)
+    out.to_csv(TABLES_DIR / "RQ2_signal_source.csv", index=False)
 
     # Summary
     print("\n=== Signal source ablation summary ===")
@@ -224,12 +235,12 @@ def main() -> None:
         print(f"  {cond_name}: F1={f1_pt:.4f} [{f1_lo:.4f}, {f1_hi:.4f}], "
               f"AUC={auc_pt:.4f} [{auc_lo:.4f}, {auc_hi:.4f}]")
 
-    # Pairwise deltas relative to emotion_gaze
-    print("\n=== Incremental deltas (emotion_gaze - X) ===")
+    # Pairwise deltas relative to emotion_gaze_ratio
+    print("\n=== Incremental deltas (emotion_gaze_ratio - X) ===")
     delta_rows = []
-    ref = condition_preds["emotion_gaze"]
+    ref = condition_preds["emotion_gaze_ratio"]
     for cond_name, preds in condition_preds.items():
-        if cond_name == "emotion_gaze":
+        if cond_name == "emotion_gaze_ratio":
             continue
 
         def _delta_f1(y_true, y_pred, y_prob):
@@ -243,22 +254,20 @@ def main() -> None:
             preds["y_prob"], n_boot=2000, seed=SEED,
             groups=preds["groups"])
         delta_rows.append({
-            "comparison": f"emotion_gaze - {cond_name}",
+            "comparison": f"emotion_gaze_ratio - {cond_name}",
             "delta_f1": pt, "delta_ci_lo": lo, "delta_ci_hi": hi,
         })
-        print(f"  emotion_gaze - {cond_name}: "
+        print(f"  emotion_gaze_ratio - {cond_name}: "
               f"delta_F1={pt:+.4f} [{lo:+.4f}, {hi:+.4f}]")
 
     delta_df = pd.DataFrame(delta_rows)
-    delta_df.to_csv(TABLES_DIR / "P1_signal_deltas.csv", index=False)
-    print(f"\nSaved to {TABLES_DIR / 'P1_signal_deltas.csv'}")
+    delta_df.to_csv(TABLES_DIR / "RQ2_signal_deltas.csv", index=False)
+    print(f"\nSaved to {TABLES_DIR / 'RQ2_signal_deltas.csv'}")
 
     # Figure
     FIGURES_DIR.mkdir(parents=True, exist_ok=True)
     ci_df = pd.DataFrame(ci_rows)
-    display_order = ["gaze_only", "gaze_ratio_only", "emotion_only",
-                     "emotion_gaze", "full_B"]
-    ci_df = ci_df.set_index("condition").loc[display_order].reset_index()
+    ci_df = ci_df.set_index("condition").loc[REGIME_ORDER].reset_index()
 
     fig, axes = plt.subplots(1, 2, figsize=(14, 5))
 
@@ -279,9 +288,9 @@ def main() -> None:
         ax.axhline(0.5, color="grey", linestyle="--", alpha=0.4, linewidth=0.8)
 
     plt.tight_layout()
-    fig.savefig(FIGURES_DIR / "P1_signal_source.png", dpi=200)
+    fig.savefig(FIGURES_DIR / "RQ2_signal_source.png", dpi=200)
     plt.close(fig)
-    print(f"Saved figure to {FIGURES_DIR / 'P1_signal_source.png'}")
+    print(f"Saved figure to {FIGURES_DIR / 'RQ2_signal_source.png'}")
 
 
 if __name__ == "__main__":
