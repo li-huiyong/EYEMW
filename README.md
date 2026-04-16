@@ -1,7 +1,6 @@
 # EYEMW
 
-Python scripts for the [EYEMW Dataset Competition](https://www.eyemindwander.com/competition/), based on:
-https://github.com/HYF9826/Eyemw
+Python scripts for the [EYEMW Dataset Competition](https://www.eyemindwander.com/competition/)
 
 ## Included scripts
 
@@ -15,6 +14,3 @@ https://github.com/HYF9826/Eyemw
 - `emodata-groupcv-emo5-xgb.py`
 - `emodata-groupcv-emo5-mlp.py`
 
-## Data files
-
-Place dataset files in `data/` locally (this folder is ignored by git).
