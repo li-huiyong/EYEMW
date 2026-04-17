@@ -1,15 +1,16 @@
 """Problem B1: Incremental-value models.
 
-On affect-available studies, compares 4 feature conditions under
-participant-grouped CV (LogReg, fixed C=1.0):
+On affect-available studies, compares four feature conditions under
+participant-grouped CV (LogisticRegression, fixed C=1.0):
   1. Gaze only
   2. Affect only
   3. Gaze + Affect
   4. Gaze + Affect + Context
 
 Per-study incremental value is tested via LOSO (each study is held out,
-model trained on the rest) to avoid the overhead of nested per-study CV
-while still showing whether affect helps equally across studies.
+model trained on the rest) while still showing whether affect helps equally
+across studies. Affect columns exclude TUT and drop constructs that are
+all-missing on the training fold (leak-free column selection).
 
 Outputs: results/tables/B1_incremental_value.csv
          results/tables/B1_per_study_incremental.csv
@@ -24,7 +25,6 @@ matplotlib.use("Agg")
 import matplotlib.pyplot as plt
 import numpy as np
 import pandas as pd
-from sklearn.model_selection import GridSearchCV
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
@@ -34,7 +34,7 @@ from src.config import (
 )
 from src.harmonize import harmonize_all
 from src.features import build_features_A, build_features_B
-from src.cv import grouped_nested_cv, leave_one_study_out, get_inner_cv
+from src.cv import grouped_nested_cv, leave_one_study_out
 from src.models import get_logreg_pipeline
 from src.evaluate import classification_metrics
 from src.utils import set_seed
@@ -49,6 +49,22 @@ def _select_affect_studies(df):
     return df[has_any].copy()
 
 
+def _affect_norm_column_names(df: pd.DataFrame, train_idx: np.ndarray | None) -> list[str]:
+    """Harmonized affect norms only (never TUT); drop columns that are all-NaN on train."""
+    candidates = [
+        f"{c}_norm" for c in ALL_CONSTRUCTS
+        if c != "TUT" and f"{c}_norm" in df.columns
+    ]
+    if not candidates:
+        return []
+    X = df[candidates].apply(pd.to_numeric, errors="coerce")
+    if train_idx is not None:
+        nan_frac = X.iloc[train_idx].isna().mean()
+    else:
+        nan_frac = X.isna().mean()
+    return nan_frac[nan_frac <= 0.9].index.tolist()
+
+
 def _build_gaze_only(df, train_idx=None):
     X_a, y, g = build_features_A(df, train_idx=train_idx)
     gaze_cols = [c for c in X_a.columns if not c.startswith(("WindowType_", "TaskGroup_"))]
@@ -56,17 +72,18 @@ def _build_gaze_only(df, train_idx=None):
 
 
 def _build_affect_only(df, train_idx=None):
-    norm_cols = [f"{c}_norm" for c in ALL_CONSTRUCTS if f"{c}_norm" in df.columns]
-    X = df[norm_cols].copy()
+    keep = _affect_norm_column_names(df, train_idx)
+    X = df[keep].apply(pd.to_numeric, errors="coerce") if keep else pd.DataFrame(index=df.index)
     y = df[LABEL_COL].astype(int)
     g = df[GROUP_COL]
-    return X, y, g, norm_cols
+    return X, y, g, keep
 
 
 def _build_gaze_affect(df, train_idx=None):
     X_gaze, y, g, gaze_cols = _build_gaze_only(df, train_idx=train_idx)
-    norm_cols = [f"{c}_norm" for c in ALL_CONSTRUCTS if f"{c}_norm" in df.columns]
-    X = pd.concat([X_gaze, df[norm_cols]], axis=1)
+    keep = _affect_norm_column_names(df, train_idx)
+    X_aff = df[keep].apply(pd.to_numeric, errors="coerce") if keep else pd.DataFrame(index=df.index)
+    X = pd.concat([X_gaze, X_aff], axis=1)
     return X, y, g, list(X.columns)
 
 

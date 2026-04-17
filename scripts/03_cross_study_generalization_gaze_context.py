@@ -48,8 +48,8 @@ def main() -> None:
     # ── LOSO evaluation (fixed pipeline, no inner grid search) ────────────
     print("\n=== Leave-One-Study-Out (LOSO) ===")
     loso_results = []
-    pipe_template, _ = get_logreg_pipeline()
-    pipe_template.set_params(lr__C=1.0)
+    pipe, _ = get_logreg_pipeline()
+    pipe.set_params(lr__C=1.0)
 
     for train_idx, test_idx, fold_info in leave_one_study_out(
             np.empty(len(y)), y, study_labels):
@@ -60,8 +60,6 @@ def main() -> None:
         X_df, _, _ = build_features_A(df, train_idx=train_idx)
         X = X_df.values.astype(float)
 
-        pipe, _ = get_logreg_pipeline()
-        pipe.set_params(lr__C=1.0)
         pipe.fit(X[train_idx], y[train_idx])
 
         y_pred = pipe.predict(X[test_idx])

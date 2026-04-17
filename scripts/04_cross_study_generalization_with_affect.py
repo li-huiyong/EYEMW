@@ -66,14 +66,19 @@ def _run_loso(df, y, groups, study_labels, feature_label, builder):
     return results
 
 
-def _run_grouped_cv(df, y, groups, feature_label, builder):
-    """Participant-grouped CV with inner GridSearchCV."""
+def _run_grouped_cv(
+    df, y, groups, feature_label, fold_X_by_id: dict[int, np.ndarray],
+    folds: list,
+):
+    """Participant-grouped CV with inner GridSearchCV.
+
+    *fold_X_by_id* maps outer fold_id to the full feature matrix for that
+    fold (built with train-only statistics), avoiding redundant rebuilds.
+    """
     results = []
-    for train_idx, test_idx, fold_info in grouped_nested_cv(
-            np.empty(len(y)), y, groups):
+    for train_idx, test_idx, fold_info in folds:
         print(f"  fold {fold_info['fold_id']} ...", end=" ", flush=True)
-        X_df, _, _ = builder(df, train_idx=train_idx)
-        X = X_df.values.astype(float)
+        X = fold_X_by_id[fold_info["fold_id"]]
 
         pipe, grid = get_logreg_pipeline()
         inner_cv = get_inner_cv(groups[train_idx])
@@ -104,16 +109,28 @@ def main() -> None:
     study_labels = df_affect["study_id"].values
 
     builders = {
-        "gaze_context": lambda df, train_idx=None: build_features_A(df, train_idx=train_idx),
-        "gaze_affect_context": lambda df, train_idx=None: build_features_B(
-            df, include_lagged=False, train_idx=train_idx),
+        "gaze_context": lambda d, train_idx=None: build_features_A(d, train_idx=train_idx),
+        "gaze_affect_context": lambda d, train_idx=None: build_features_B(
+            d, include_lagged=False, train_idx=train_idx),
     }
+
+    folds = list(grouped_nested_cv(np.empty(len(y)), y, groups))
+    fold_X_a: dict[int, np.ndarray] = {}
+    fold_X_b: dict[int, np.ndarray] = {}
+    for train_idx, _test_idx, fold_info in folds:
+        fid = fold_info["fold_id"]
+        Xa, _, _ = build_features_A(df_affect, train_idx=train_idx)
+        fold_X_a[fid] = Xa.values.astype(float)
+        Xb, _, _ = build_features_B(
+            df_affect, include_lagged=False, train_idx=train_idx)
+        fold_X_b[fid] = Xb.values.astype(float)
 
     all_results = []
     for feat_label, builder in builders.items():
         print(f"\n=== {feat_label} / grouped_cv ===")
+        fold_maps = {"gaze_context": fold_X_a, "gaze_affect_context": fold_X_b}
         all_results.extend(_run_grouped_cv(
-            df_affect, y, groups, feat_label, builder))
+            df_affect, y, groups, feat_label, fold_maps[feat_label], folds))
         print(f"\n=== {feat_label} / LOSO ===")
         all_results.extend(_run_loso(
             df_affect, y, groups, study_labels, feat_label, builder))
